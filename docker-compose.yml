@@ -1,0 +1,116 @@
+# docker compose up -d --build   (biến APP_HOST, BASE_PATH trong .env)
+#   Public:    https://demo.thanhbn.space/project/shadowing   (Cloudflare Tunnel -> :80)
+#   Local:     http://shadowing.localhost/project/shadowing
+#   Dashboard: http://traefik.shadowing.localhost
+name: shadowing
+
+services:
+  traefik:
+    image: traefik:v3.5
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=mainnet
+      - --entrypoints.web.address=:80
+      - --api.dashboard=true
+      - --accesslog=true
+    ports:
+      - "80:80"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [mainnet]
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.dashboard.rule=Host(`traefik.shadowing.localhost`)
+      - traefik.http.routers.dashboard.entrypoints=web
+      - traefik.http.routers.dashboard.service=api@internal
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: shadowing
+      POSTGRES_PASSWORD: shadowing
+      POSTGRES_DB: shadowing
+    ports:
+      - "5434:5432" 
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shadowing"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [mainnet]
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    environment:
+      PORT: 4100
+      DATABASE_URL: postgres://shadowing:shadowing@db:5432/shadowing
+      TRANSLATE_PROVIDER: libretranslate
+      LIBRETRANSLATE_URL: http://translator:5000
+      PUBLIC_URL: ${BASE_PATH:-/project/shadowing} # URL media/uploads trả về: /project/shadowing/media/...
+    volumes:
+      - ./backend/media:/app/media:ro
+      - ./backend/data:/app/data:ro
+      - uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [mainnet]
+    labels:
+      - traefik.enable=true
+      # https://${APP_HOST}${BASE_PATH}/{api,media,uploads}/... -> strip ${BASE_PATH} -> backend:4100/{api,...}
+      - traefik.http.routers.shadowing-api.rule=(Host(`${APP_HOST:-demo.thanhbn.space}`) || Host(`shadowing.localhost`)) && (PathPrefix(`${BASE_PATH:-/project/shadowing}/api`) || PathPrefix(`${BASE_PATH:-/project/shadowing}/media`) || PathPrefix(`${BASE_PATH:-/project/shadowing}/uploads`))
+      - traefik.http.routers.shadowing-api.entrypoints=web
+      - traefik.http.routers.shadowing-api.middlewares=shadowing-strip
+      - traefik.http.routers.shadowing-api.service=shadowing-api
+      - traefik.http.services.shadowing-api.loadbalancer.server.port=4100
+      - traefik.http.middlewares.shadowing-strip.stripprefix.prefixes=${BASE_PATH:-/project/shadowing}
+    restart: unless-stopped
+
+  # Dịch máy tự host. Lần đầu khởi động sẽ tải model (~100MB/chiều/ngôn ngữ) vào volume ltmodels.
+  # Không public qua Traefik, chỉ backend gọi nội bộ.
+  translator:
+    image: libretranslate/libretranslate:latest
+    environment:
+      LT_LOAD_ONLY: ${TRANSLATE_LANGS:-en,vi,ja,ko,zh,th,id,fr,es,de,pt,ru}
+      LT_UPDATE_MODELS: "true" # tải bổ sung model còn thiếu khi khởi động
+    volumes:
+      - ltmodels:/home/libretranslate/.local
+    healthcheck:
+      test: ["CMD-SHELL", "./venv/bin/python scripts/healthcheck.py"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30m
+    networks: [mainnet]
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        BASE_PATH: ${BASE_PATH:-/project/shadowing}
+    depends_on: [backend]
+    networks: [mainnet]
+    labels:
+      - traefik.enable=true
+      # Mọi path khác dưới ${BASE_PATH} -> nginx (SPA)
+      - traefik.http.routers.shadowing-web.rule=(Host(`${APP_HOST:-demo.thanhbn.space}`) || Host(`shadowing.localhost`)) && PathPrefix(`${BASE_PATH:-/project/shadowing}`)
+      - traefik.http.routers.shadowing-web.entrypoints=web
+      - traefik.http.routers.shadowing-web.middlewares=shadowing-strip
+      - traefik.http.routers.shadowing-web.service=shadowing-web
+      - traefik.http.services.shadowing-web.loadbalancer.server.port=80
+    restart: unless-stopped
+
+networks:
+  mainnet:
+    name: mainnet
+
+volumes:
+  pgdata:
+  uploads:
+  ltmodels:

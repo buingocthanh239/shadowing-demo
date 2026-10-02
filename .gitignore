@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+backend/uploads/
+# Dữ liệu clone từ tryshadowing.com — chỉ dùng demo local, không commit/deploy
+backend/media/
+backend/data/
