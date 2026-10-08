@@ -5,6 +5,7 @@ Bản demo tính năng shadowing theo kiểu tryshadowing.com: nghe từng câu 
 | Thành phần | Công nghệ |
 |---|---|
 | Frontend | React 19 + Vite + react-router, build tĩnh, phục vụ bằng nginx |
+| App mobile | Flutter (Android / iOS) trong [`mobile/`](mobile/README.md), dùng chung backend |
 | Backend | Node 24, Express 5, `pg`, `multer` |
 | Database | PostgreSQL 16 |
 | Gateway | Traefik v3 (Docker provider), đứng sau Cloudflare Tunnel |
